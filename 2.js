@@ -1,24 +1,12 @@
-/*
-Node.js TCP demos (event-driven, non-blocking).
-NOTE: Node does not expose true blocking sockets. These are real-world
-patterns to compare bad vs good usage in production-style code.
-
-Usage:
-    node 2.js proxy-bad <listenHost> <listenPort> <upHost> <upPort>
-    node 2.js proxy <listenHost> <listenPort> <upHost> <upPort>
-    node 2.js chat <host> <port>
-
-Env vars:
-    IDLE_TIMEOUT_MS
-*/
-
 const net = require("net");
+const readline = require("readline");
 
 const IDLE_TIMEOUT_MS = Number(process.env.IDLE_TIMEOUT_MS || 30000);
 const MAX_LINE = 1024 * 1024;
 
 function startProxyBad(listenHost, listenPort, upHost, upPort) {
     const server = net.createServer((client) => {
+        console.log(`client connected: ${client.remoteAddress}:${client.remotePort}`);
         client.setTimeout(IDLE_TIMEOUT_MS);
         client.once("data", (req) => {
             if (req.length > MAX_LINE) {
@@ -27,7 +15,10 @@ function startProxyBad(listenHost, listenPort, upHost, upPort) {
             }
 
             const upstream = net.createConnection(upPort, upHost);
-            upstream.once("connect", () => upstream.write(req));
+            upstream.once("connect", () => {
+                console.log(`upstream connected: ${upHost}:${upPort}`);
+                upstream.write(req);
+            });
 
             upstream.once("data", (res) => {
                 client.end(res);
@@ -52,12 +43,16 @@ function startProxyBad(listenHost, listenPort, upHost, upPort) {
 
 function startProxy(listenHost, listenPort, upHost, upPort) {
     const server = net.createServer((client) => {
+        console.log(`client connected: ${client.remoteAddress}:${client.remotePort}`);
         client.setTimeout(IDLE_TIMEOUT_MS);
         client.setNoDelay(true);
 
         const upstream = net.createConnection(upPort, upHost);
         upstream.setTimeout(IDLE_TIMEOUT_MS);
         upstream.setNoDelay(true);
+        upstream.once("connect", () => {
+            console.log(`upstream connected: ${upHost}:${upPort}`);
+        });
 
         client.pipe(upstream);
         upstream.pipe(client);
@@ -96,6 +91,7 @@ function startChat(host, port) {
     }
 
     const server = net.createServer((socket) => {
+        console.log(`chat client connected: ${socket.remoteAddress}:${socket.remotePort}`);
         socket.setEncoding("utf8");
         socket.setTimeout(IDLE_TIMEOUT_MS);
         socket.setNoDelay(true);
@@ -161,11 +157,32 @@ function startChat(host, port) {
     });
 }
 
+function startChatClient(host, port) {
+    const socket = net.createConnection({ host, port });
+    socket.setEncoding("utf8");
+    socket.setTimeout(IDLE_TIMEOUT_MS);
+
+    socket.on("data", (chunk) => {
+        process.stdout.write(chunk);
+    });
+
+    socket.on("timeout", () => socket.destroy());
+    socket.on("error", (err) => console.error(err.message));
+
+    socket.on("connect", () => {
+        console.log(`connected to chat server ${host}:${port}`);
+        const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+        rl.on("line", (line) => socket.write(line + "\n"));
+        rl.on("close", () => socket.end());
+    });
+}
+
 function printUsage() {
     console.log("usage:");
     console.log("  node 2.js proxy-bad <listenHost> <listenPort> <upHost> <upPort>");
     console.log("  node 2.js proxy <listenHost> <listenPort> <upHost> <upPort>");
     console.log("  node 2.js chat <host> <port>");
+    console.log("  node 2.js chat-client <host> <port>");
 }
 
 function main() {
@@ -199,6 +216,15 @@ function main() {
             process.exit(1);
         }
         startChat(a, Number(b));
+        return;
+    }
+
+    if (mode === "chat-client") {
+        if (!a || !b) {
+            printUsage();
+            process.exit(1);
+        }
+        startChatClient(a, Number(b));
         return;
     }
 
